@@ -2,6 +2,10 @@ name = "mobcrafter-api"
 main = "src/index.js"
 compatibility_date = "2025-12-16"
 
+# ===== アプリ設定 =====
+[vars]
+ADMIN_EMAILS = "oj1755@gmail.com"
+
 # D1
 [[d1_databases]]
 binding = "SUBMISSIONS_DB"
