@@ -3,7 +3,7 @@ export default {
     const url = new URL(request.url);
 
     // ----------------------------
-    // CORS test
+    // CORS
     // ----------------------------
     const corsHeaders = (req) => {
       const origin = req.headers.get("Origin") || "*";
