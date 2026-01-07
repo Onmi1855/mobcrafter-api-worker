@@ -1,1 +1,1 @@
-# mobcrafter-api-worker A
+# mobcrafter-api-worker
