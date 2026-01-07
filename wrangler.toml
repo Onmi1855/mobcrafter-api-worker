@@ -1,3 +1,14 @@
 name = "mobcrafter-api"
 main = "src/index.js"
 compatibility_date = "2025-12-16"
+
+# D1
+[[d1_databases]]
+binding = "SUBMISSIONS_DB"
+database_name = "mobcrafter_portal"
+database_id = "（D1画面に出てるUUID）"
+
+# R2
+[[r2_buckets]]
+binding = "UPLOADS_BUCKET"
+bucket_name = "mobcrafter-uploads"
