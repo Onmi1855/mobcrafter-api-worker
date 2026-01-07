@@ -6,7 +6,7 @@ compatibility_date = "2025-12-16"
 [[d1_databases]]
 binding = "SUBMISSIONS_DB"
 database_name = "mobcrafter_portal"
-database_id = "（D1画面に出てるUUID）"
+database_id = "f2bf5b67-af2a-47e0-929c-a3c7f1a09743"
 
 # R2
 [[r2_buckets]]
