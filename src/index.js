@@ -46,6 +46,15 @@ export default {
 
     const nowIso = () => new Date().toISOString();
 
+    const clampInt = (value, fallback, min, max) => {
+      const n = Number.parseInt(String(value ?? ""), 10);
+      const base = Number.isFinite(n) ? n : Number.parseInt(String(fallback ?? ""), 10);
+      const v = Number.isFinite(base) ? base : 0;
+      const lo = Number.isFinite(min) ? min : -Infinity;
+      const hi = Number.isFinite(max) ? max : Infinity;
+      return Math.min(hi, Math.max(lo, v));
+    };
+
     // ----------------------------
     // Auth helpers (Cloudflare Access)
     // ----------------------------
@@ -282,9 +291,11 @@ export default {
       }
 
       // total_count
-      const countRow = await env.SUBMISSIONS_DB.prepare(
+      let countStmt = env.SUBMISSIONS_DB.prepare(
         `SELECT COUNT(*) AS cnt FROM submissions WHERE ${where}`
-      ).bind(...binds).first();
+      );
+      if (binds.length) countStmt = countStmt.bind(...binds);
+      const countRow = await countStmt.first();
 
       const totalCount = Number(countRow?.cnt || 0);
       const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
