@@ -551,7 +551,7 @@ export default {
             ok: false,
             error: "unauthorized",
             hint:
-              "401の場合：Cloudflare Access の保護範囲（mobcrafter.net/api/admin*）と、管理者Allowポリシー、または env.ADMIN_EMAILS を確認してください。",
+              "If you see 401: check the Cloudflare Access protected paths (mobcrafter.net/api/admin*), your admin Allow policy, and env.ADMIN_EMAILS.",
           },
           auth.status,
           corsHeaders(request)
