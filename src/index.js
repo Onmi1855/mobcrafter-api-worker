@@ -134,7 +134,12 @@ export default {
     if (request.method === "GET" && url.pathname === "/api/login") {
       const next = url.searchParams.get("next") || "/";
       const safeNext = (next.startsWith("/") && !next.startsWith("//")) ? next : "/";
-      const to = new URL(safeNext, url.origin).toString(); // ★絶対URL化
+      // IMPORTANT:
+      // Cloudflare Access is expected to protect /api/whoami (and/or /api/admin/*).
+      // Redirecting directly to `safeNext` would not trigger Access.
+      // By sending the user to /api/whoami?next=..., Access can handle login,
+      // then the Worker will redirect back to `safeNext` when email is present.
+      const to = new URL(`/api/whoami?next=${encodeURIComponent(safeNext)}`, url.origin).toString();
       return Response.redirect(to, 302);
     }
 
