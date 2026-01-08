@@ -2,6 +2,11 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    const isMissingColumnError = (e, columnName) => {
+      const msg = String(e?.message || e || "");
+      return msg.includes("no such column") && msg.includes(String(columnName));
+    };
+
     // ----------------------------
     // CORS
     // ----------------------------
@@ -229,20 +234,12 @@ export default {
               thumb_screen_id
            FROM submissions
            WHERE status='approved' AND deleted_at IS NULL
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, id DESC
            LIMIT 100`
         ).all();
 
-        return json({ items: results }, 200, corsHeaders(request));
+        return json({ items: results || [] }, 200, corsHeaders(request));
       }
-
-      // ---- paging ----
-      const clampInt = (v, def, min, max) => {
-        const n = Number(v);
-        if (!Number.isFinite(n)) return def;
-        const i = Math.floor(n);
-        return Math.max(min, Math.min(max, i));
-      };
 
       // page/page_size 優先（limit/offset も互換で許可）
       const pageSize = clampInt(url.searchParams.get("page_size") ?? url.searchParams.get("limit"), 20, 1, 50);
@@ -324,7 +321,7 @@ export default {
           total_count: totalCount,
           total_pages: totalPages,
           sort,
-          q: qraw || ""
+          q: qraw || "",
         },
         200,
         corsHeaders(request)
@@ -337,28 +334,62 @@ export default {
     if (request.method === "GET" && publicMetaById) {
       const id = publicMetaById[1];
 
-      const row = await env.SUBMISSIONS_DB.prepare(
-        `SELECT
-            id,
-            submission_no,
-            unit_id,
-            status,
-            title,
-            description,
-            tags,
-            author_name,
-            author_email,
-            mc_version,
-            mod_version,
-            created_at,
-            updated_at,
-            download_count,
-            thumb_mode,
-            thumb_screen_id
-         FROM submissions
-         WHERE id=? AND deleted_at IS NULL
-         LIMIT 1`
-      ).bind(id).first();
+      let row;
+      try {
+        row = await env.SUBMISSIONS_DB.prepare(
+          `SELECT
+              id,
+              submission_no,
+              unit_id,
+              status,
+              title,
+              description,
+              tags,
+              author_name,
+              author_email,
+              mc_version,
+              mod_version,
+              created_at,
+              updated_at,
+              download_count,
+              thumb_mode,
+              thumb_screen_id
+           FROM submissions
+           WHERE id=? AND deleted_at IS NULL
+           LIMIT 1`
+        ).bind(id).first();
+      } catch (e) {
+        if (isMissingColumnError(e, "mc_version")) {
+          row = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_no,
+                unit_id,
+                status,
+                title,
+                description,
+                tags,
+                author_name,
+                author_email,
+                mod_version,
+                created_at,
+                updated_at,
+                download_count,
+                thumb_mode,
+                thumb_screen_id
+             FROM submissions
+             WHERE id=? AND deleted_at IS NULL
+             LIMIT 1`
+          ).bind(id).first();
+          if (row && typeof row === "object") row.mc_version = null;
+        } else {
+          return json(
+            { error: "db_error", message: String(e?.message || e) },
+            500,
+            corsHeaders(request)
+          );
+        }
+      }
 
       if (!row) return json({ error: "not_found" }, 404, corsHeaders(request));
       if (row.status !== "approved") return json({ error: "not_approved" }, 403, corsHeaders(request));
@@ -371,28 +402,63 @@ export default {
     const publicU = url.pathname.match(/^\/api\/public\/u\/(\d+)$/);
     if (request.method === "GET" && publicU) {
       const no = Number(publicU[1]);
-      const row = await env.SUBMISSIONS_DB.prepare(
-        `SELECT
-            id,
-            submission_no,
-            unit_id,
-            status,
-            title,
-            description,
-            tags,
-            author_name,
-            author_email,
-            mc_version,
-            mod_version,
-            created_at,
-            updated_at,
-            download_count,
-            thumb_mode,
-            thumb_screen_id
-         FROM submissions
-         WHERE submission_no=? AND deleted_at IS NULL
-         LIMIT 1`
-      ).bind(no).first();
+
+      let row;
+      try {
+        row = await env.SUBMISSIONS_DB.prepare(
+          `SELECT
+              id,
+              submission_no,
+              unit_id,
+              status,
+              title,
+              description,
+              tags,
+              author_name,
+              author_email,
+              mc_version,
+              mod_version,
+              created_at,
+              updated_at,
+              download_count,
+              thumb_mode,
+              thumb_screen_id
+           FROM submissions
+           WHERE submission_no=? AND deleted_at IS NULL
+           LIMIT 1`
+        ).bind(no).first();
+      } catch (e) {
+        if (isMissingColumnError(e, "mc_version")) {
+          row = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_no,
+                unit_id,
+                status,
+                title,
+                description,
+                tags,
+                author_name,
+                author_email,
+                mod_version,
+                created_at,
+                updated_at,
+                download_count,
+                thumb_mode,
+                thumb_screen_id
+             FROM submissions
+             WHERE submission_no=? AND deleted_at IS NULL
+             LIMIT 1`
+          ).bind(no).first();
+          if (row && typeof row === "object") row.mc_version = null;
+        } else {
+          return json(
+            { error: "db_error", message: String(e?.message || e) },
+            500,
+            corsHeaders(request)
+          );
+        }
+      }
 
       if (!row) return json({ error: "not_found" }, 404, corsHeaders(request));
       if (row.status !== "approved") return json({ error: "not_approved" }, 403, corsHeaders(request));
