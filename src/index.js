@@ -555,6 +555,310 @@ export default {
     }
 
     // =========================================================
+    // COMMENTS (dedicated)
+    // =========================================================
+
+    const isMissingTableError = (e, tableName) => {
+      const msg = String(e?.message || e || "");
+      return msg.includes("no such table") && msg.includes(String(tableName));
+    };
+
+    const getSubmissionForCommentAccess = async (submissionId) => {
+      return await env.SUBMISSIONS_DB.prepare(
+        `SELECT id, status, author_email, deleted_at FROM submissions WHERE id=? LIMIT 1`
+      )
+        .bind(submissionId)
+        .first();
+    };
+
+    const canReadSubmissionComments = async (req, submissionId) => {
+      if (!env.SUBMISSIONS_DB) {
+        return { ok: false, status: 500, error: "missing_binding:SUBMISSIONS_DB" };
+      }
+
+      const sub = await getSubmissionForCommentAccess(submissionId);
+      if (!sub || sub.deleted_at) return { ok: false, status: 404, error: "not_found" };
+
+      // approved は公開
+      const st = String(sub.status || "").toLowerCase();
+      if (st === "approved") return { ok: true, status: 200, sub };
+
+      // 非approvedは owner/admin のみ
+      const email = getAccessEmail(req);
+      const isAdmin = email && isAdminEmail(email);
+      const isOwner =
+        email &&
+        (String(sub.author_email || "").trim().toLowerCase() === String(email).trim().toLowerCase());
+      if (!email) return { ok: false, status: 401, error: "unauthorized" };
+      if (!isAdmin && !isOwner) return { ok: false, status: 403, error: "forbidden" };
+      return { ok: true, status: 200, sub, email, isAdmin, isOwner };
+    };
+
+    // GET /api/comments?submission_id=<uuid>&page=1&page_size=20
+    if (request.method === "GET" && url.pathname === "/api/comments") {
+      try {
+        const submissionId = String(url.searchParams.get("submission_id") || "").trim();
+        if (!submissionId) {
+          return json({ ok: false, error: "missing_submission_id" }, 400, corsHeaders(request));
+        }
+
+        const access = await canReadSubmissionComments(request, submissionId);
+        if (!access.ok) {
+          return json({ ok: false, error: access.error }, access.status, corsHeaders(request));
+        }
+
+        const pageSize = clampInt(url.searchParams.get("page_size"), 20, 1, 50);
+        let page = clampInt(url.searchParams.get("page"), 1, 1, 10_000_000);
+        let offset = (page - 1) * pageSize;
+
+        let totalCount = 0;
+        try {
+          const countRow = await env.SUBMISSIONS_DB.prepare(
+            `SELECT COUNT(*) AS cnt FROM comments WHERE submission_id=? AND deleted_at IS NULL`
+          )
+            .bind(submissionId)
+            .first();
+          totalCount = Number(countRow?.cnt || 0);
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        page = Math.max(1, Math.min(totalPages, page));
+        offset = (page - 1) * pageSize;
+
+        let results = [];
+        try {
+          const out = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_id,
+                body,
+                author_name,
+                author_email,
+                created_at
+             FROM comments
+             WHERE submission_id=? AND deleted_at IS NULL
+             ORDER BY created_at DESC, id DESC
+             LIMIT ? OFFSET ?`
+          )
+            .bind(submissionId, pageSize, offset)
+            .all();
+          results = out?.results || [];
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        return json(
+          {
+            ok: true,
+            submission_id: submissionId,
+            items: results,
+            page,
+            page_size: pageSize,
+            total_count: totalCount,
+            total_pages: totalPages,
+          },
+          200,
+          corsHeaders(request)
+        );
+      } catch (e) {
+        return json(
+          { ok: false, error: "comments_list_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
+    // POST /api/comments  { submission_id, body }
+    if (request.method === "POST" && url.pathname === "/api/comments") {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const auth = requireUser(request);
+        if (!auth.ok) {
+          return json({ ok: false, error: "unauthorized" }, auth.status, corsHeaders(request));
+        }
+
+        let bodyObj = null;
+        try {
+          bodyObj = await request.json();
+        } catch {
+          bodyObj = null;
+        }
+
+        const submissionId = String(bodyObj?.submission_id || "").trim();
+        if (!submissionId) {
+          return json({ ok: false, error: "missing_submission_id" }, 400, corsHeaders(request));
+        }
+
+        const rawBody = String(bodyObj?.body ?? "");
+        const text = rawBody.trim();
+        if (!text) {
+          return json({ ok: false, error: "empty_body" }, 400, corsHeaders(request));
+        }
+        if (text.length > 1000) {
+          return json({ ok: false, error: "body_too_long" }, 400, corsHeaders(request));
+        }
+
+        const access = await canReadSubmissionComments(request, submissionId);
+        if (!access.ok) {
+          // 非approvedへの投稿は owner/admin に限定
+          return json({ ok: false, error: access.error }, access.status, corsHeaders(request));
+        }
+        if (access.sub && String(access.sub.status || "").toLowerCase() !== "approved") {
+          const email = auth.email;
+          const isAdmin = isAdminEmail(email);
+          const isOwner =
+            String(access.sub.author_email || "").trim().toLowerCase() === String(email).trim().toLowerCase();
+          if (!isAdmin && !isOwner) {
+            return json({ ok: false, error: "forbidden" }, 403, corsHeaders(request));
+          }
+        }
+
+        const authorEmail = auth.email;
+        const authorName = String(
+          bodyObj?.author_name || bodyObj?.authorName || (authorEmail.split("@")[0] || "unknown")
+        ).slice(0, 60);
+
+        // Simple cooldown: same user cannot post too frequently on the same submission.
+        // (No existing rate-limit framework in this repo, so keep it DB-only + minimal.)
+        try {
+          const last = await env.SUBMISSIONS_DB.prepare(
+            `SELECT created_at FROM comments
+              WHERE submission_id=?
+                AND author_email=?
+                AND deleted_at IS NULL
+              ORDER BY created_at DESC
+              LIMIT 1`
+          )
+            .bind(submissionId, authorEmail)
+            .first();
+          const lastAt = last && last.created_at ? new Date(String(last.created_at)) : null;
+          if (lastAt && Number.isFinite(lastAt.getTime())) {
+            const dtMs = Date.now() - lastAt.getTime();
+            if (dtMs >= 0 && dtMs < 15_000) {
+              return json({ ok: false, error: "too_many_requests" }, 429, corsHeaders(request));
+            }
+          }
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        const id = crypto.randomUUID();
+        const now = nowIso();
+
+        try {
+          await env.SUBMISSIONS_DB.prepare(
+            `INSERT INTO comments (id, submission_id, body, author_name, author_email, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+            .bind(id, submissionId, text, authorName, authorEmail, now)
+            .run();
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        return json(
+          {
+            ok: true,
+            item: {
+              id,
+              submission_id: submissionId,
+              body: text,
+              author_name: authorName,
+              author_email: authorEmail,
+              created_at: now,
+            },
+          },
+          200,
+          corsHeaders(request)
+        );
+      } catch (e) {
+        return json(
+          { ok: false, error: "comment_post_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
+    // DELETE /api/comments/:id  (admin only, soft delete)
+    const commentDeleteMatch = url.pathname.match(/^\/api\/comments\/([^\/]+)$/);
+    if (request.method === "DELETE" && commentDeleteMatch) {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const auth = requireAdmin(request);
+        if (!auth.ok) {
+          return json({ ok: false, error: "unauthorized" }, auth.status, corsHeaders(request));
+        }
+
+        const id = commentDeleteMatch[1];
+
+        let row = null;
+        try {
+          row = await env.SUBMISSIONS_DB.prepare(
+            `SELECT id, deleted_at FROM comments WHERE id=? LIMIT 1`
+          )
+            .bind(id)
+            .first();
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        if (!row || row.deleted_at) {
+          return json({ ok: false, error: "not_found" }, 404, corsHeaders(request));
+        }
+
+        const now = nowIso();
+        try {
+          await env.SUBMISSIONS_DB.prepare(
+            `UPDATE comments
+               SET deleted_at=?,
+                   deleted_by=?
+             WHERE id=?`
+          )
+            .bind(now, auth.email, id)
+            .run();
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        return json({ ok: true }, 200, corsHeaders(request));
+      } catch (e) {
+        return json(
+          { ok: false, error: "comment_delete_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
+    // =========================================================
     // MY (logged-in user)
     // =========================================================
 

@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "worker: dev (wrangler)",
+			"type": "shell",
+			"command": "wrangler",
+			"args": [
+				"dev"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "worker: d1 apply comments migration",
+			"type": "shell",
+			"command": "wrangler",
+			"args": [
+				"d1",
+				"execute",
+				"mobcrafter_portal",
+				"--file",
+				"./migrations/0001_create_comments.sql"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
