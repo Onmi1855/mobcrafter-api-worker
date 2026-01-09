@@ -563,6 +563,97 @@ export default {
       return msg.includes("no such table") && msg.includes(String(tableName));
     };
 
+    // Public read-only comments list (approved submissions only)
+    // GET /api/public/comments?submission_id=<uuid>&page=1&page_size=20
+    if (request.method === "GET" && url.pathname === "/api/public/comments") {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const submissionId = String(url.searchParams.get("submission_id") || "").trim();
+        if (!submissionId) {
+          return json({ ok: false, error: "missing_submission_id" }, 400, corsHeaders(request));
+        }
+
+        const sub = await getSubmissionForCommentAccess(submissionId);
+        if (!sub || sub.deleted_at) return json({ ok: false, error: "not_found" }, 404, corsHeaders(request));
+
+        const st = String(sub.status || "").toLowerCase();
+        if (st !== "approved") {
+          return json({ ok: false, error: "not_approved" }, 403, corsHeaders(request));
+        }
+
+        const pageSize = clampInt(url.searchParams.get("page_size"), 20, 1, 50);
+        let page = clampInt(url.searchParams.get("page"), 1, 1, 10_000_000);
+        let offset = (page - 1) * pageSize;
+
+        let totalCount = 0;
+        try {
+          const countRow = await env.SUBMISSIONS_DB.prepare(
+            `SELECT COUNT(*) AS cnt FROM comments WHERE submission_id=? AND deleted_at IS NULL`
+          )
+            .bind(submissionId)
+            .first();
+          totalCount = Number(countRow?.cnt || 0);
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        page = Math.max(1, Math.min(totalPages, page));
+        offset = (page - 1) * pageSize;
+
+        let results = [];
+        try {
+          const out = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_id,
+                body,
+                author_name,
+                author_email,
+                created_at
+             FROM comments
+             WHERE submission_id=? AND deleted_at IS NULL
+             ORDER BY created_at DESC, id DESC
+             LIMIT ? OFFSET ?`
+          )
+            .bind(submissionId, pageSize, offset)
+            .all();
+          results = out?.results || [];
+        } catch (e) {
+          if (isMissingTableError(e, "comments")) {
+            return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        return json(
+          {
+            ok: true,
+            submission_id: submissionId,
+            items: results,
+            page,
+            page_size: pageSize,
+            total_count: totalCount,
+            total_pages: totalPages,
+          },
+          200,
+          corsHeaders(request)
+        );
+      } catch (e) {
+        return json(
+          { ok: false, error: "comments_list_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
     const getSubmissionForCommentAccess = async (submissionId) => {
       return await env.SUBMISSIONS_DB.prepare(
         `SELECT id, status, author_email, deleted_at FROM submissions WHERE id=? LIMIT 1`
