@@ -654,15 +654,15 @@ export default {
       }
     }
 
-    const getSubmissionForCommentAccess = async (submissionId) => {
+    async function getSubmissionForCommentAccess(submissionId) {
       return await env.SUBMISSIONS_DB.prepare(
         `SELECT id, status, author_email, deleted_at FROM submissions WHERE id=? LIMIT 1`
       )
         .bind(submissionId)
         .first();
-    };
+    }
 
-    const canReadSubmissionComments = async (req, submissionId) => {
+    async function canReadSubmissionComments(req, submissionId) {
       if (!env.SUBMISSIONS_DB) {
         return { ok: false, status: 500, error: "missing_binding:SUBMISSIONS_DB" };
       }
@@ -683,7 +683,7 @@ export default {
       if (!email) return { ok: false, status: 401, error: "unauthorized" };
       if (!isAdmin && !isOwner) return { ok: false, status: 403, error: "forbidden" };
       return { ok: true, status: 200, sub, email, isAdmin, isOwner };
-    };
+    }
 
     // GET /api/comments?submission_id=<uuid>&page=1&page_size=20
     if (request.method === "GET" && url.pathname === "/api/comments") {
