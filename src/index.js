@@ -232,25 +232,57 @@ export default {
         url.searchParams.has("sort");
 
       if (!hasAnyParam) {
-        const { results } = await env.SUBMISSIONS_DB.prepare(
-          `SELECT
-              id,
-              submission_no,
-              unit_id,
-              title,
-              description,
-              tags,
-              author_name,
-              created_at,
-              mod_version,
-              download_count,
-              thumb_mode,
-              thumb_screen_id
-           FROM submissions
-           WHERE status='approved' AND deleted_at IS NULL
-           ORDER BY created_at DESC, id DESC
-           LIMIT 100`
-        ).all();
+        let results = [];
+        try {
+          const out = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_no,
+                unit_id,
+                title,
+                description,
+                tags,
+                author_name,
+                created_at,
+                mod_version,
+                download_count,
+                thumb_mode,
+                thumb_screen_id,
+                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
+             FROM submissions
+             WHERE status='approved' AND deleted_at IS NULL
+             ORDER BY created_at DESC, id DESC
+             LIMIT 100`
+          ).all();
+          results = out?.results || [];
+        } catch (e) {
+          // Backward compatible when likes table doesn't exist yet.
+          const msg = String(e?.message || e || "");
+          if (msg.includes("no such table") && msg.includes("likes")) {
+            const out = await env.SUBMISSIONS_DB.prepare(
+              `SELECT
+                  id,
+                  submission_no,
+                  unit_id,
+                  title,
+                  description,
+                  tags,
+                  author_name,
+                  created_at,
+                  mod_version,
+                  download_count,
+                  thumb_mode,
+                  thumb_screen_id
+               FROM submissions
+               WHERE status='approved' AND deleted_at IS NULL
+               ORDER BY created_at DESC, id DESC
+               LIMIT 100`
+            ).all();
+            results = (out?.results || []).map((r) => ({ ...r, likes_count: 0 }));
+          } else {
+            throw e;
+          }
+        }
 
         return json({ items: results || [] }, 200, corsHeaders(request));
       }
@@ -309,25 +341,56 @@ export default {
       page = Math.max(1, Math.min(totalPages, page));
       offset = (page - 1) * pageSize;
 
-      const { results } = await env.SUBMISSIONS_DB.prepare(
-        `SELECT
-            id,
-            submission_no,
-            unit_id,
-            title,
-            description,
-            tags,
-            author_name,
-            created_at,
-            mod_version,
-            download_count,
-            thumb_mode,
-            thumb_screen_id
-         FROM submissions
-         WHERE ${where}
-         ORDER BY ${orderBy}
-         LIMIT ? OFFSET ?`
-      ).bind(...binds, pageSize, offset).all();
+      let results = [];
+      try {
+        const out = await env.SUBMISSIONS_DB.prepare(
+          `SELECT
+              id,
+              submission_no,
+              unit_id,
+              title,
+              description,
+              tags,
+              author_name,
+              created_at,
+              mod_version,
+              download_count,
+              thumb_mode,
+              thumb_screen_id,
+              COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
+           FROM submissions
+           WHERE ${where}
+           ORDER BY ${orderBy}
+           LIMIT ? OFFSET ?`
+        ).bind(...binds, pageSize, offset).all();
+        results = out?.results || [];
+      } catch (e) {
+        const msg = String(e?.message || e || "");
+        if (msg.includes("no such table") && msg.includes("likes")) {
+          const out = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_no,
+                unit_id,
+                title,
+                description,
+                tags,
+                author_name,
+                created_at,
+                mod_version,
+                download_count,
+                thumb_mode,
+                thumb_screen_id
+             FROM submissions
+             WHERE ${where}
+             ORDER BY ${orderBy}
+             LIMIT ? OFFSET ?`
+          ).bind(...binds, pageSize, offset).all();
+          results = (out?.results || []).map((r) => ({ ...r, likes_count: 0 }));
+        } else {
+          throw e;
+        }
+      }
 
       return json(
         {
@@ -369,7 +432,8 @@ export default {
               updated_at,
               download_count,
               thumb_mode,
-              thumb_screen_id
+              thumb_screen_id,
+              COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
            FROM submissions
            WHERE id=? AND deleted_at IS NULL
            LIMIT 1`
@@ -392,7 +456,8 @@ export default {
                 updated_at,
                 download_count,
                 thumb_mode,
-                thumb_screen_id
+                thumb_screen_id,
+                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE id=? AND deleted_at IS NULL
              LIMIT 1`
@@ -438,7 +503,8 @@ export default {
               updated_at,
               download_count,
               thumb_mode,
-              thumb_screen_id
+              thumb_screen_id,
+              COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
            FROM submissions
            WHERE submission_no=? AND deleted_at IS NULL
            LIMIT 1`
@@ -461,7 +527,8 @@ export default {
                 updated_at,
                 download_count,
                 thumb_mode,
-                thumb_screen_id
+                thumb_screen_id,
+                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE submission_no=? AND deleted_at IS NULL
              LIMIT 1`
@@ -983,7 +1050,8 @@ export default {
                mod_version,
                download_count,
                thumb_mode,
-               thumb_screen_id
+               thumb_screen_id,
+               COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE author_email=? AND status='approved' AND deleted_at IS NULL
              ORDER BY created_at DESC
@@ -1002,16 +1070,361 @@ export default {
                mod_version,
                download_count,
                thumb_mode,
-               thumb_screen_id
+               thumb_screen_id,
+               COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE author_email=? AND deleted_at IS NULL
              ORDER BY created_at DESC
              LIMIT 200`;
 
-        const { results } = await env.SUBMISSIONS_DB.prepare(sql).bind(auth.email).all();
+        let results = [];
+        try {
+          const out = await env.SUBMISSIONS_DB.prepare(sql).bind(auth.email).all();
+          results = out?.results || [];
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (msg.includes("no such table") && msg.includes("likes")) {
+            const sqlNoLikes = approvedOnly
+              ? `SELECT
+                   id,
+                   submission_no,
+                   unit_id,
+                   title,
+                   description,
+                   tags,
+                   author_name,
+                   author_email,
+                   created_at,
+                   mod_version,
+                   download_count,
+                   thumb_mode,
+                   thumb_screen_id
+                 FROM submissions
+                 WHERE author_email=? AND status='approved' AND deleted_at IS NULL
+                 ORDER BY created_at DESC
+                 LIMIT 200`
+              : `SELECT
+                   id,
+                   submission_no,
+                   unit_id,
+                   status,
+                   title,
+                   description,
+                   tags,
+                   author_name,
+                   author_email,
+                   created_at,
+                   mod_version,
+                   download_count,
+                   thumb_mode,
+                   thumb_screen_id
+                 FROM submissions
+                 WHERE author_email=? AND deleted_at IS NULL
+                 ORDER BY created_at DESC
+                 LIMIT 200`;
+            const out = await env.SUBMISSIONS_DB.prepare(sqlNoLikes).bind(auth.email).all();
+            results = (out?.results || []).map((r) => ({ ...r, likes_count: 0 }));
+          } else {
+            throw e;
+          }
+        }
+
         return json({ ok: true, scope: approvedOnly ? "approved" : "all", items: results || [] }, 200, corsHeaders(request));
       } catch (e) {
         return json({ ok: false, error: "my_submissions_failed", message: String(e?.message || e) }, 500, corsHeaders(request));
+      }
+    }
+
+    // =========================================================
+    // LIKES
+    // =========================================================
+
+    const likesPublicMatch = url.pathname.match(/^\/api\/public\/submissions\/([^\/]+)\/likes$/);
+    if (request.method === "GET" && likesPublicMatch) {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const submissionId = String(likesPublicMatch[1] || "").trim();
+        if (!submissionId) {
+          return json({ ok: false, error: "missing_submission_id" }, 400, corsHeaders(request));
+        }
+
+        const sub = await env.SUBMISSIONS_DB.prepare(
+          `SELECT id, status, deleted_at FROM submissions WHERE id=? LIMIT 1`
+        )
+          .bind(submissionId)
+          .first();
+
+        if (!sub || sub.deleted_at) return json({ ok: false, error: "not_found" }, 404, corsHeaders(request));
+        if (String(sub.status || "").toLowerCase() !== "approved") {
+          return json({ ok: false, error: "not_approved" }, 403, corsHeaders(request));
+        }
+
+        let likesCount = 0;
+        try {
+          const row = await env.SUBMISSIONS_DB.prepare(
+            `SELECT COUNT(*) AS cnt FROM likes WHERE submission_id=?`
+          )
+            .bind(submissionId)
+            .first();
+          likesCount = Number(row?.cnt || 0);
+        } catch (e) {
+          if (isMissingTableError(e, "likes")) {
+            // migration not applied yet
+            likesCount = 0;
+          } else {
+            throw e;
+          }
+        }
+
+        return json({ ok: true, submission_id: submissionId, likes_count: likesCount }, 200, corsHeaders(request));
+      } catch (e) {
+        return json(
+          { ok: false, error: "likes_public_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
+    const likesPrivateMatch = url.pathname.match(/^\/api\/submissions\/([^\/]+)\/likes$/);
+    if (request.method === "GET" && likesPrivateMatch) {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const auth = requireUser(request);
+        if (!auth.ok) return json({ ok: false, error: "unauthorized" }, auth.status, corsHeaders(request));
+
+        const submissionId = String(likesPrivateMatch[1] || "").trim();
+        if (!submissionId) {
+          return json({ ok: false, error: "missing_submission_id" }, 400, corsHeaders(request));
+        }
+
+        const sub = await env.SUBMISSIONS_DB.prepare(
+          `SELECT id, status, author_email, deleted_at FROM submissions WHERE id=? LIMIT 1`
+        )
+          .bind(submissionId)
+          .first();
+
+        if (!sub || sub.deleted_at) return json({ ok: false, error: "not_found" }, 404, corsHeaders(request));
+
+        // approved は誰でもOK / それ以外は owner/admin のみ
+        const st = String(sub.status || "").toLowerCase();
+        if (st !== "approved" && !canOwnerOrAdmin(auth.email, sub.author_email)) {
+          return json({ ok: false, error: "forbidden" }, 403, corsHeaders(request));
+        }
+
+        let likesCount = 0;
+        let likedByMe = false;
+        try {
+          const row = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                (SELECT COUNT(*) FROM likes WHERE submission_id=?) AS likes_count,
+                (SELECT 1 FROM likes WHERE submission_id=? AND user_email=? LIMIT 1) AS liked
+            `
+          )
+            .bind(submissionId, submissionId, auth.email)
+            .first();
+          likesCount = Number(row?.likes_count || 0);
+          likedByMe = Boolean(row?.liked);
+        } catch (e) {
+          if (isMissingTableError(e, "likes")) {
+            likesCount = 0;
+            likedByMe = false;
+          } else {
+            throw e;
+          }
+        }
+
+        return json(
+          { ok: true, submission_id: submissionId, likes_count: likesCount, liked_by_me: likedByMe },
+          200,
+          corsHeaders(request)
+        );
+      } catch (e) {
+        return json({ ok: false, error: "likes_private_failed", message: String(e?.message || e) }, 500, corsHeaders(request));
+      }
+    }
+
+    const likesToggleMatch = url.pathname.match(/^\/api\/submissions\/([^\/]+)\/likes\/toggle$/);
+    if (request.method === "POST" && likesToggleMatch) {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const auth = requireUser(request);
+        if (!auth.ok) return json({ ok: false, error: "unauthorized" }, auth.status, corsHeaders(request));
+
+        const submissionId = String(likesToggleMatch[1] || "").trim();
+        if (!submissionId) {
+          return json({ ok: false, error: "missing_submission_id" }, 400, corsHeaders(request));
+        }
+
+        const sub = await env.SUBMISSIONS_DB.prepare(
+          `SELECT id, status, author_email, deleted_at FROM submissions WHERE id=? LIMIT 1`
+        )
+          .bind(submissionId)
+          .first();
+
+        if (!sub || sub.deleted_at) return json({ ok: false, error: "not_found" }, 404, corsHeaders(request));
+
+        const st = String(sub.status || "").toLowerCase();
+        if (st !== "approved" && !canOwnerOrAdmin(auth.email, sub.author_email)) {
+          return json({ ok: false, error: "forbidden" }, 403, corsHeaders(request));
+        }
+
+        // Ensure likes table exists
+        try {
+          await env.SUBMISSIONS_DB.prepare(
+            `SELECT 1 FROM likes LIMIT 1`
+          ).first();
+        } catch (e) {
+          if (isMissingTableError(e, "likes")) {
+            return json({ ok: false, error: "missing_table:likes" }, 500, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        const now = nowIso();
+        const existed = await env.SUBMISSIONS_DB.prepare(
+          `SELECT 1 AS ok FROM likes WHERE submission_id=? AND user_email=? LIMIT 1`
+        )
+          .bind(submissionId, auth.email)
+          .first();
+
+        let likedByMe = false;
+        if (existed) {
+          await env.SUBMISSIONS_DB.prepare(
+            `DELETE FROM likes WHERE submission_id=? AND user_email=?`
+          )
+            .bind(submissionId, auth.email)
+            .run();
+          likedByMe = false;
+        } else {
+          await env.SUBMISSIONS_DB.prepare(
+            `INSERT INTO likes (submission_id, user_email, created_at) VALUES (?,?,?)`
+          )
+            .bind(submissionId, auth.email, now)
+            .run();
+          likedByMe = true;
+        }
+
+        const countRow = await env.SUBMISSIONS_DB.prepare(
+          `SELECT COUNT(*) AS cnt FROM likes WHERE submission_id=?`
+        )
+          .bind(submissionId)
+          .first();
+        const likesCount = Number(countRow?.cnt || 0);
+
+        return json(
+          { ok: true, submission_id: submissionId, likes_count: likesCount, liked_by_me: likedByMe },
+          200,
+          corsHeaders(request)
+        );
+      } catch (e) {
+        return json({ ok: false, error: "likes_toggle_failed", message: String(e?.message || e) }, 500, corsHeaders(request));
+      }
+    }
+
+    // Batch: likes status for multiple submissions (for index hydration)
+    // POST /api/likes/batch  { submission_ids: [uuid, ...] }
+    if (request.method === "POST" && url.pathname === "/api/likes/batch") {
+      try {
+        if (!env.SUBMISSIONS_DB) {
+          return json({ ok: false, error: "missing_binding:SUBMISSIONS_DB" }, 500, corsHeaders(request));
+        }
+
+        const auth = requireUser(request);
+        if (!auth.ok) return json({ ok: false, error: "unauthorized" }, auth.status, corsHeaders(request));
+
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {
+          body = null;
+        }
+
+        const raw = body && Array.isArray(body.submission_ids) ? body.submission_ids : [];
+        const ids = Array.from(
+          new Set(
+            raw
+              .map((v) => String(v || "").trim())
+              .filter(Boolean)
+          )
+        ).slice(0, 50);
+
+        if (!ids.length) {
+          return json({ ok: true, items: [] }, 200, corsHeaders(request));
+        }
+
+        // Defaults
+        const outById = new Map();
+        for (const id of ids) outById.set(id, { submission_id: id, likes_count: 0, liked_by_me: false });
+
+        // Filter to approved+not-deleted submissions only (index shows approved anyway)
+        const ph = ids.map(() => "?").join(",");
+        const approvedRows = await env.SUBMISSIONS_DB.prepare(
+          `SELECT id FROM submissions WHERE id IN (${ph}) AND status='approved' AND deleted_at IS NULL`
+        )
+          .bind(...ids)
+          .all();
+
+        const approvedIds = (approvedRows?.results || []).map((r) => String(r.id || "").trim()).filter(Boolean);
+        if (!approvedIds.length) {
+          return json({ ok: true, items: Array.from(outById.values()) }, 200, corsHeaders(request));
+        }
+
+        // If likes table missing, just return defaults.
+        try {
+          await env.SUBMISSIONS_DB.prepare(`SELECT 1 FROM likes LIMIT 1`).first();
+        } catch (e) {
+          if (isMissingTableError(e, "likes")) {
+            return json({ ok: true, items: Array.from(outById.values()) }, 200, corsHeaders(request));
+          }
+          throw e;
+        }
+
+        const ph2 = approvedIds.map(() => "?").join(",");
+
+        // counts
+        const counts = await env.SUBMISSIONS_DB.prepare(
+          `SELECT submission_id, COUNT(*) AS cnt
+           FROM likes
+           WHERE submission_id IN (${ph2})
+           GROUP BY submission_id`
+        )
+          .bind(...approvedIds)
+          .all();
+
+        for (const r of (counts?.results || [])) {
+          const sid = String(r.submission_id || "").trim();
+          if (!sid || !outById.has(sid)) continue;
+          outById.get(sid).likes_count = Number(r.cnt || 0);
+        }
+
+        // liked_by_me
+        const liked = await env.SUBMISSIONS_DB.prepare(
+          `SELECT submission_id
+           FROM likes
+           WHERE user_email=? AND submission_id IN (${ph2})`
+        )
+          .bind(auth.email, ...approvedIds)
+          .all();
+
+        for (const r of (liked?.results || [])) {
+          const sid = String(r.submission_id || "").trim();
+          if (!sid || !outById.has(sid)) continue;
+          outById.get(sid).liked_by_me = true;
+        }
+
+        return json({ ok: true, items: Array.from(outById.values()) }, 200, corsHeaders(request));
+      } catch (e) {
+        return json({ ok: false, error: "likes_batch_failed", message: String(e?.message || e) }, 500, corsHeaders(request));
       }
     }
 
