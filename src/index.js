@@ -11,16 +11,24 @@ export default {
     // CORS
     // ----------------------------
     const corsHeaders = (req) => {
-      const origin = req.headers.get("Origin") || "*";
-      return {
-        "Access-Control-Allow-Origin": origin,
+      const origin = req.headers.get("Origin");
+      const headers = {
         "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
         // CF Access のメールヘッダ等も許可
         "Access-Control-Allow-Headers":
           "Content-Type, Authorization, Cf-Access-Authenticated-User-Email, CF-Access-Authenticated-User-Email, cf-access-authenticated-user-email, Cf-Access-Jwt-Assertion, CF-Access-Jwt-Assertion, cf-access-jwt-assertion",
         "Access-Control-Max-Age": "86400",
-        "Vary": "Origin",
       };
+
+      // Credentialed CORS requires explicit origin (not '*').
+      if (origin) {
+        headers["Access-Control-Allow-Origin"] = origin;
+        headers["Access-Control-Allow-Credentials"] = "true";
+        headers["Vary"] = "Origin";
+      } else {
+        headers["Access-Control-Allow-Origin"] = "*";
+      }
+      return headers;
     };
 
     if (request.method === "OPTIONS") {
