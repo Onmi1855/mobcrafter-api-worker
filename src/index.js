@@ -58,6 +58,43 @@ export default {
     // ----------------------------
     // Auth helpers (Cloudflare Access)
     // ----------------------------
+    const decodeBase64Url = (input) => {
+      try {
+        const s = String(input || "").replace(/-/g, "+").replace(/_/g, "/");
+        const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+        const bin = atob(s + pad);
+        // Decode UTF-8
+        let out = "";
+        for (let i = 0; i < bin.length; i++) out += String.fromCharCode(bin.charCodeAt(i));
+        try {
+          return decodeURIComponent(escape(out));
+        } catch {
+          return out;
+        }
+      } catch {
+        return "";
+      }
+    };
+
+    const getEmailFromJwt = (jwt) => {
+      try {
+        const parts = String(jwt || "").split(".");
+        if (parts.length < 2) return null;
+        const payloadText = decodeBase64Url(parts[1]);
+        if (!payloadText) return null;
+        const payload = JSON.parse(payloadText);
+        const email =
+          payload?.email ||
+          payload?.user_email ||
+          payload?.identity?.email ||
+          null;
+        if (email && String(email).includes("@")) return String(email).trim().toLowerCase();
+        return null;
+      } catch {
+        return null;
+      }
+    };
+
     const getAccessEmail = (req) => {
       const candidates = [
         "Cf-Access-Authenticated-User-Email",
@@ -68,6 +105,15 @@ export default {
         const v = req.headers.get(k);
         if (v && String(v).includes("@")) return String(v).trim().toLowerCase();
       }
+
+      const jwt =
+        req.headers.get("Cf-Access-Jwt-Assertion") ||
+        req.headers.get("CF-Access-Jwt-Assertion") ||
+        req.headers.get("cf-access-jwt-assertion") ||
+        "";
+      const jwtEmail = getEmailFromJwt(jwt);
+      if (jwtEmail) return jwtEmail;
+
       return null;
     };
 
@@ -99,6 +145,19 @@ export default {
       if (isAdminEmail(email)) return true;
       const owner = String(rowAuthorEmail || "").trim().toLowerCase();
       return owner && owner === email;
+    };
+
+    const normalizeThumbMode = (v) => {
+      if (v === null || v === undefined) return "3d";
+      const s = String(v).trim().toLowerCase();
+      if (!s) return "3d";
+      if (s === "screen" || s === "screenshot" || s === "1" || s === "true") return "screen";
+      return "3d";
+    };
+
+    const withNormalizedThumbMode = (row) => {
+      if (!row || typeof row !== "object") return row;
+      return { ...row, thumb_mode: normalizeThumbMode(row.thumb_mode) };
     };
 
     // ----------------------------
@@ -166,10 +225,14 @@ export default {
         request.headers.get("cf-access-jwt-assertion") ||
         null;
 
+      const jwtEmail = getEmailFromJwt(jwt);
+
       return json(
         {
           ok: true,
           email,
+          jwt_email: jwtEmail,
+          resolved_email: getAccessEmail(request),
           has_jwt: Boolean(jwt),
           admin_env: String(env.ADMIN_EMAILS || env.ADMIN_EMAIL || ""),
           path: url.pathname,
@@ -254,7 +317,7 @@ export default {
              ORDER BY created_at DESC, id DESC
              LIMIT 100`
           ).all();
-          results = out?.results || [];
+          results = (out?.results || []).map(withNormalizedThumbMode);
         } catch (e) {
           // Backward compatible when likes table doesn't exist yet.
           const msg = String(e?.message || e || "");
@@ -278,7 +341,7 @@ export default {
                ORDER BY created_at DESC, id DESC
                LIMIT 100`
             ).all();
-            results = (out?.results || []).map((r) => ({ ...r, likes_count: 0 }));
+            results = (out?.results || []).map((r) => ({ ...withNormalizedThumbMode(r), likes_count: 0 }));
           } else {
             throw e;
           }
@@ -363,7 +426,7 @@ export default {
            ORDER BY ${orderBy}
            LIMIT ? OFFSET ?`
         ).bind(...binds, pageSize, offset).all();
-        results = out?.results || [];
+        results = (out?.results || []).map(withNormalizedThumbMode);
       } catch (e) {
         const msg = String(e?.message || e || "");
         if (msg.includes("no such table") && msg.includes("likes")) {
@@ -386,7 +449,7 @@ export default {
              ORDER BY ${orderBy}
              LIMIT ? OFFSET ?`
           ).bind(...binds, pageSize, offset).all();
-          results = (out?.results || []).map((r) => ({ ...r, likes_count: 0 }));
+          results = (out?.results || []).map((r) => ({ ...withNormalizedThumbMode(r), likes_count: 0 }));
         } else {
           throw e;
         }
@@ -475,7 +538,7 @@ export default {
       if (!row) return json({ error: "not_found" }, 404, corsHeaders(request));
       if (row.status !== "approved") return json({ error: "not_approved" }, 403, corsHeaders(request));
 
-      return json(row, 200, corsHeaders(request));
+      return json(withNormalizedThumbMode(row), 200, corsHeaders(request));
     }
 
     // 詳細ページ用：submission_no で1件取得（approvedのみ）
@@ -546,7 +609,87 @@ export default {
       if (!row) return json({ error: "not_found" }, 404, corsHeaders(request));
       if (row.status !== "approved") return json({ error: "not_approved" }, 403, corsHeaders(request));
 
-      return json({ ok: true, item: row }, 200, corsHeaders(request));
+      return json({ ok: true, item: withNormalizedThumbMode(row) }, 200, corsHeaders(request));
+    }
+
+    // OGP / 検索用画像
+    // GET /api/public/submissions/:id/og-image
+    const publicOgImageMatch = url.pathname.match(/^\/api\/public\/submissions\/([^\/]+)\/og-image$/);
+    if (request.method === "GET" && publicOgImageMatch) {
+      const key = String(publicOgImageMatch[1] || "").trim();
+      const isNo = /^\d+$/.test(key);
+
+      let row = null;
+      if (isNo) {
+        row = await env.SUBMISSIONS_DB.prepare(
+          `SELECT id, submission_no, status, deleted_at, thumb_mode, thumb_screen_id
+             FROM submissions
+            WHERE submission_no=?
+            LIMIT 1`
+        ).bind(Number(key)).first();
+      } else {
+        row = await env.SUBMISSIONS_DB.prepare(
+          `SELECT id, submission_no, status, deleted_at, thumb_mode, thumb_screen_id
+             FROM submissions
+            WHERE id=?
+            LIMIT 1`
+        ).bind(key).first();
+      }
+
+      if (!row || row.deleted_at) return new Response("not found", { status: 404, headers: corsHeaders(request) });
+      if (String(row.status || "").toLowerCase() !== "approved") {
+        return new Response("not approved", { status: 403, headers: corsHeaders(request) });
+      }
+
+      const normMode = normalizeThumbMode(row.thumb_mode);
+      let screenId = (normMode === "screen" && row.thumb_screen_id) ? String(row.thumb_screen_id) : "";
+
+      if (!screenId) {
+        try {
+          const srow = await env.SUBMISSIONS_DB.prepare(
+            `SELECT id
+               FROM submission_screens
+              WHERE submission_id=?
+              ORDER BY created_at DESC, id DESC
+              LIMIT 1`
+          ).bind(row.id).first();
+          if (srow && srow.id) screenId = String(srow.id);
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (!(msg.includes("no such table") && msg.includes("submission_screens"))) {
+            throw e;
+          }
+        }
+      }
+
+      if (screenId) {
+        const to = new URL(`/api/public/screens/${encodeURIComponent(screenId)}`, url.origin).toString();
+        return Response.redirect(to, 302);
+      }
+
+      const svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">` +
+        `<defs>` +
+        `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1">` +
+        `<stop offset="0" stop-color="#e6f0ff"/>` +
+        `<stop offset="1" stop-color="#f5f9ff"/>` +
+        `</linearGradient>` +
+        `</defs>` +
+        `<rect width="1200" height="630" fill="url(#g)"/>` +
+        `<text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle"` +
+        ` font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="40" fill="#64748b">` +
+        `MobCrafter Unit` +
+        `</text>` +
+        `</svg>`;
+
+      return new Response(svg, {
+        status: 200,
+        headers: {
+          ...corsHeaders(request),
+          "Content-Type": "image/svg+xml; charset=utf-8",
+          "Cache-Control": "public, max-age=300",
+        },
+      });
     }
 
     // JSONプレビュー用（DL数を増やさない）
@@ -691,7 +834,7 @@ export default {
           )
             .bind(submissionId, pageSize, offset)
             .all();
-          results = out?.results || [];
+          results = (out?.results || []).map(withNormalizedThumbMode);
         } catch (e) {
           if (isMissingTableError(e, "comments")) {
             return json({ ok: false, error: "missing_table:comments" }, 500, corsHeaders(request));
@@ -1123,7 +1266,7 @@ export default {
                  ORDER BY created_at DESC
                  LIMIT 200`;
             const out = await env.SUBMISSIONS_DB.prepare(sqlNoLikes).bind(auth.email).all();
-            results = (out?.results || []).map((r) => ({ ...r, likes_count: 0 }));
+            results = (out?.results || []).map((r) => ({ ...withNormalizedThumbMode(r), likes_count: 0 }));
           } else {
             throw e;
           }
@@ -1475,7 +1618,14 @@ export default {
           deleted_by,
           download_count,
           thumb_mode,
-          thumb_screen_id
+          thumb_screen_id,
+          (
+            SELECT id
+              FROM submission_screens
+             WHERE submission_id=submissions.id
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+          ) AS latest_screen_id
         FROM submissions
         WHERE status = ?
       `;
@@ -1503,10 +1653,62 @@ export default {
 
       sql += ` ORDER BY created_at DESC LIMIT 300`;
 
-      const stmt = env.SUBMISSIONS_DB.prepare(sql);
-      const { results } = await stmt.bind(...binds).all();
+      let results = [];
+      try {
+        const stmt = env.SUBMISSIONS_DB.prepare(sql);
+        const out = await stmt.bind(...binds).all();
+        results = out?.results || [];
+      } catch (e) {
+        if (isMissingTableError(e, "submission_screens")) {
+          // fallback (no latest_screen_id)
+          let sql2 = `
+            SELECT
+              id,
+              submission_no,
+              unit_id,
+              status,
+              title,
+              description,
+              tags,
+              author_name,
+              author_email,
+              created_at,
+              updated_at,
+              approved_at,
+              approved_by,
+              deleted_at,
+              deleted_by,
+              download_count,
+              thumb_mode,
+              thumb_screen_id
+            FROM submissions
+            WHERE status = ?
+          `;
+          if (!includeDeleted) sql2 += ` AND deleted_at IS NULL`;
+          if (qlike) {
+            sql2 += `
+              AND (
+                LOWER(COALESCE(title,'')) LIKE ?
+                OR LOWER(COALESCE(description,'')) LIKE ?
+                OR LOWER(COALESCE(tags,'')) LIKE ?
+                OR LOWER(COALESCE(author_name,'')) LIKE ?
+                OR LOWER(COALESCE(author_email,'')) LIKE ?
+                OR LOWER(COALESCE(unit_id,'')) LIKE ?
+                OR LOWER(COALESCE(id,'')) LIKE ?
+              )
+            `;
+          }
+          sql2 += ` ORDER BY created_at DESC LIMIT 300`;
+          const stmt2 = env.SUBMISSIONS_DB.prepare(sql2);
+          const out2 = await stmt2.bind(...binds).all();
+          results = out2?.results || [];
+        } else {
+          throw e;
+        }
+      }
 
-      return json({ ok: true, items: results }, 200, corsHeaders(request));
+      const normalized = (results || []).map(withNormalizedThumbMode);
+      return json({ ok: true, items: normalized }, 200, corsHeaders(request));
     }
 
     // 承認
@@ -1732,7 +1934,7 @@ export default {
         return json({ ok: false, error: "forbidden" }, 403, corsHeaders(request));
       }
 
-      return json(row, 200, corsHeaders(request));
+      return json(withNormalizedThumbMode(row), 200, corsHeaders(request));
     }
 
     // JSON取得（owner/admin）
@@ -1928,7 +2130,7 @@ export default {
           return json({ ok: false, error: "missing_file" }, 400, corsHeaders(request));
         }
         const thumbModeRaw = form.get("thumb_mode");
-        const thumbMode = (String(thumbModeRaw || "3d").toLowerCase() === "screen") ? "screen" : "3d";
+        const thumbMode = normalizeThumbMode(thumbModeRaw || "3d");
 
         const mime = (file.type || "").toLowerCase();
         if (!mime.startsWith("image/")) {
