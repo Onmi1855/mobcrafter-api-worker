@@ -287,6 +287,40 @@ export default {
       }
     }
 
+    // ----------------------------
+    // admin/whoami（admin 用 Access セッション確立）
+    // - /api/admin* の Access App を踏ませるための whoami
+    // - ?next=/path があれば、ログイン済みのときだけ 302 で戻す
+    // ----------------------------
+    if (request.method === "GET" && url.pathname === "/api/admin/whoami") {
+      try {
+        const email = getAccessEmail(request);
+        const payload = {
+          ok: true,
+          email: email || null,
+          is_admin: email ? isAdminEmail(email) : false,
+        };
+
+        const next = url.searchParams.get("next");
+        if (next) {
+          const safeNext =
+            next.startsWith("/") && !next.startsWith("//") ? next : "/";
+          if (email) {
+            const to = new URL(safeNext, url.origin).toString();
+            return new Response("", { status: 302, headers: { Location: to } });
+          }
+        }
+
+        return json(payload, 200, corsHeaders(request));
+      } catch (e) {
+        return json(
+          { ok: false, error: "admin_whoami_exception", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
     // =========================================================
     // PUBLIC
     // =========================================================
