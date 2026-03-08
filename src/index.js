@@ -179,6 +179,51 @@ export default {
       return obj;
     };
 
+    // ----------------------------
+    // MobCrafter JSON blocks validation (old/new)
+    // - old: blocks: [{dx,dy,dz,blockId}, ...]
+    // - new: blocks: { palette: string[], instances: number[] } where instances is [dx,dy,dz,paletteIndex,...]
+    // NOTE: We intentionally keep this validation lightweight to avoid rejecting legacy data.
+    // ----------------------------
+    const getUnitBlocksInfo = (unitJson) => {
+      if (!unitJson || typeof unitJson !== "object") {
+        return { ok: false, count: 0, format: "invalid", error: "invalid_json" };
+      }
+
+      const blocks = unitJson.blocks;
+
+      if (Array.isArray(blocks)) {
+        const count = blocks.length;
+        return count > 0
+          ? { ok: true, count, format: "array" }
+          : { ok: false, count: 0, format: "array", error: "blocks_required" };
+      }
+
+      if (blocks && typeof blocks === "object") {
+        const palette = blocks.palette;
+        const instances = blocks.instances;
+        if (Array.isArray(palette) && Array.isArray(instances) && instances.length % 4 === 0) {
+          const count = instances.length / 4;
+          if (count <= 0 || palette.length <= 0) {
+            return { ok: false, count: 0, format: "palette_instances", error: "blocks_required" };
+          }
+
+          // Validate palette index range (sample)
+          const sample = Math.min(count, 300);
+          for (let k = 0; k < sample; k++) {
+            const pi = instances[k * 4 + 3];
+            if (!Number.isInteger(pi) || pi < 0 || pi >= palette.length) {
+              return { ok: false, count: 0, format: "palette_instances", error: "blocks_required" };
+            }
+          }
+
+          return { ok: true, count, format: "palette_instances" };
+        }
+      }
+
+      return { ok: false, count: 0, format: "unknown", error: "blocks_required" };
+    };
+
     const readR2JsonTextAndRewrite = async (jsonKey, unitId) => {
       const obj = await env.UPLOADS_BUCKET.get(jsonKey);
       if (!obj) return { ok: false, error: "file_missing" };
@@ -1913,9 +1958,8 @@ export default {
       if (!unitJson || typeof unitJson !== "object") {
         return json({ ok: false, error: "invalid_json" }, 400, corsHeaders(request));
       }
-      if (!Array.isArray(unitJson.blocks) || unitJson.blocks.length === 0) {
-        return json({ ok: false, error: "blocks_required" }, 400, corsHeaders(request));
-      }
+      const blocksInfo = getUnitBlocksInfo(unitJson);
+      if (!blocksInfo.ok) return json({ ok: false, error: "blocks_required" }, 400, corsHeaders(request));
 
       // unitId は固定（確定仕様）
       const unitId = String(row.unit_id || ("unit_" + String(row.submission_no || id)));
@@ -2076,9 +2120,8 @@ export default {
       if (!unitJson || typeof unitJson !== "object") {
         return json({ ok: false, error: "invalid_json" }, 400, corsHeaders(request));
       }
-      if (!Array.isArray(unitJson.blocks) || unitJson.blocks.length === 0) {
-        return json({ ok: false, error: "blocks_required" }, 400, corsHeaders(request));
-      }
+      const blocksInfo = getUnitBlocksInfo(unitJson);
+      if (!blocksInfo.ok) return json({ ok: false, error: "blocks_required" }, 400, corsHeaders(request));
 
       const unitId = String(row.unit_id || ("unit_" + String(row.submission_no || id)));
       rewriteUnitId(unitJson, unitId);
@@ -2383,9 +2426,8 @@ export default {
         if (!unitJson || typeof unitJson !== "object") {
           return json({ error: "invalid_json" }, 400, corsHeaders(request));
         }
-        if (!Array.isArray(unitJson.blocks) || unitJson.blocks.length === 0) {
-          return json({ error: "blocks_required" }, 400, corsHeaders(request));
-        }
+        const blocksInfo = getUnitBlocksInfo(unitJson);
+        if (!blocksInfo.ok) return json({ error: "blocks_required" }, 400, corsHeaders(request));
 
         const title = String(body.title || unitJson.title || "Untitled").slice(0, 80);
         const description = String(body.description || "").slice(0, 2000);
