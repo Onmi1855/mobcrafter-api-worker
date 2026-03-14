@@ -728,8 +728,9 @@ export default {
         return new Response("not approved", { status: 403, headers: corsHeaders(request) });
       }
 
-      const normMode = normalizeThumbMode(row.thumb_mode);
-      let screenId = (normMode === "screen" && row.thumb_screen_id) ? String(row.thumb_screen_id) : "";
+      // Prefer explicit thumb_screen_id regardless of thumb_mode.
+      // This allows using a static 3D thumbnail as the canonical share/search image.
+      let screenId = row.thumb_screen_id ? String(row.thumb_screen_id) : "";
 
       if (!screenId) {
         try {
@@ -2217,6 +2218,15 @@ export default {
         const thumbModeRaw = form.get("thumb_mode");
         const thumbMode = normalizeThumbMode(thumbModeRaw || "3d");
 
+        // Only update submission thumb when explicitly requested.
+        // This prevents incidental screenshot uploads from unintentionally changing the card/OG image.
+        const setThumbRaw = form.get("set_thumb") ?? form.get("setThumb") ?? form.get("setThumbMode");
+        const setThumb = (() => {
+          if (setThumbRaw === null || setThumbRaw === undefined) return false;
+          const s = String(setThumbRaw).trim().toLowerCase();
+          return s === "1" || s === "true" || s === "yes" || s === "on";
+        })();
+
         const mime = (file.type || "").toLowerCase();
         if (!mime.startsWith("image/")) {
           return json({ ok: false, error: "invalid_mime", mime }, 400, corsHeaders(request));
@@ -2244,26 +2254,29 @@ export default {
           .run();
 
         // ---- thumb update (if requested) ----
-        try {
-          const now2 = nowIso();
-          if (thumbMode === "screen") {
-            await env.SUBMISSIONS_DB.prepare(
-              `UPDATE submissions
-                 SET thumb_mode=?, thumb_screen_id=?, updated_at=?
-               WHERE id=? AND deleted_at IS NULL`
-            ).bind("screen", id, now2, submissionId).run();
-          } else {
-            await env.SUBMISSIONS_DB.prepare(
-              `UPDATE submissions
-                 SET thumb_mode=?, thumb_screen_id=NULL, updated_at=?
-               WHERE id=? AND deleted_at IS NULL`
-            ).bind("3d", now2, submissionId).run();
+        if (setThumb) {
+          try {
+            const now2 = nowIso();
+            if (thumbMode === "screen") {
+              await env.SUBMISSIONS_DB.prepare(
+                `UPDATE submissions
+                   SET thumb_mode=?, thumb_screen_id=?, updated_at=?
+                 WHERE id=? AND deleted_at IS NULL`
+              ).bind("screen", id, now2, submissionId).run();
+            } else {
+              // Keep thumb_screen_id even for 3d so the static 3D image can be used for list/OG.
+              await env.SUBMISSIONS_DB.prepare(
+                `UPDATE submissions
+                   SET thumb_mode=?, thumb_screen_id=?, updated_at=?
+                 WHERE id=? AND deleted_at IS NULL`
+              ).bind("3d", id, now2, submissionId).run();
+            }
+          } catch (e) {
+            // ここが失敗しても、画像アップロード自体は成功させる
           }
-        } catch (e) {
-          // ここが失敗しても、画像アップロード自体は成功させる
         }
 
-        return json({ ok: true, id, submission_id: submissionId, thumb_mode: thumbMode }, 200, corsHeaders(request));
+        return json({ ok: true, id, submission_id: submissionId, thumb_mode: thumbMode, set_thumb: setThumb }, 200, corsHeaders(request));
       } catch (e) {
         return json({ ok: false, error: "screen_upload_failed", message: String(e?.message || e) }, 500, corsHeaders(request));
       }
