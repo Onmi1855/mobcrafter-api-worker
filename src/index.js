@@ -370,6 +370,157 @@ export default {
     // PUBLIC
     // =========================================================
 
+    // =========================================================
+    // TRENDING NOW: 直近 N 日以内に登録された作品を累計DL降順で返す
+    // GET /api/public/trending?days=30&limit=20
+    // これが本当の「最近勢いのある作品」。sort=dl は All-time Popular と区別。
+    // =========================================================
+    if (request.method === "GET" && url.pathname === "/api/public/trending") {
+      try {
+        const days  = clampInt(url.searchParams.get("days"),  30, 1, 365);
+        const limit = clampInt(url.searchParams.get("limit"), 20, 1,  50);
+
+        // ISO date threshold (SQLite TEXT comparison works for ISO8601)
+        const threshold = new Date(Date.now() - days * 86_400_000).toISOString();
+
+        let results = [];
+        try {
+          const out = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_no,
+                unit_id,
+                title,
+                description,
+                tags,
+                author_name,
+                created_at,
+                mod_version,
+                download_count,
+                thumb_mode,
+                thumb_screen_id,
+                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
+             FROM submissions
+             WHERE status='approved'
+               AND deleted_at IS NULL
+               AND created_at >= ?
+             ORDER BY download_count DESC, created_at DESC, id DESC
+             LIMIT ?`
+          ).bind(threshold, limit).all();
+          results = (out?.results || []).map(withNormalizedThumbMode);
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (msg.includes("no such table") && msg.includes("likes")) {
+            const out = await env.SUBMISSIONS_DB.prepare(
+              `SELECT
+                  id,
+                  submission_no,
+                  unit_id,
+                  title,
+                  description,
+                  tags,
+                  author_name,
+                  created_at,
+                  mod_version,
+                  download_count,
+                  thumb_mode,
+                  thumb_screen_id
+               FROM submissions
+               WHERE status='approved'
+                 AND deleted_at IS NULL
+                 AND created_at >= ?
+               ORDER BY download_count DESC, created_at DESC, id DESC
+               LIMIT ?`
+            ).bind(threshold, limit).all();
+            results = (out?.results || []).map((r) => ({ ...withNormalizedThumbMode(r), likes_count: 0 }));
+          } else {
+            throw e;
+          }
+        }
+
+        return json(
+          { items: results, days, limit, threshold },
+          200,
+          corsHeaders(request)
+        );
+      } catch (e) {
+        return json(
+          { ok: false, error: "trending_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
+    // =========================================================
+    // POPULAR (All-time): 全期間の累計DL降順
+    // GET /api/public/popular?limit=20
+    // =========================================================
+    if (request.method === "GET" && url.pathname === "/api/public/popular") {
+      try {
+        const limit = clampInt(url.searchParams.get("limit"), 20, 1, 50);
+
+        let results = [];
+        try {
+          const out = await env.SUBMISSIONS_DB.prepare(
+            `SELECT
+                id,
+                submission_no,
+                unit_id,
+                title,
+                description,
+                tags,
+                author_name,
+                created_at,
+                mod_version,
+                download_count,
+                thumb_mode,
+                thumb_screen_id,
+                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
+             FROM submissions
+             WHERE status='approved' AND deleted_at IS NULL
+             ORDER BY download_count DESC, created_at DESC, id DESC
+             LIMIT ?`
+          ).bind(limit).all();
+          results = (out?.results || []).map(withNormalizedThumbMode);
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (msg.includes("no such table") && msg.includes("likes")) {
+            const out = await env.SUBMISSIONS_DB.prepare(
+              `SELECT
+                  id,
+                  submission_no,
+                  unit_id,
+                  title,
+                  description,
+                  tags,
+                  author_name,
+                  created_at,
+                  mod_version,
+                  download_count,
+                  thumb_mode,
+                  thumb_screen_id
+               FROM submissions
+               WHERE status='approved' AND deleted_at IS NULL
+               ORDER BY download_count DESC, created_at DESC, id DESC
+               LIMIT ?`
+            ).bind(limit).all();
+            results = (out?.results || []).map((r) => ({ ...withNormalizedThumbMode(r), likes_count: 0 }));
+          } else {
+            throw e;
+          }
+        }
+
+        return json({ items: results, limit }, 200, corsHeaders(request));
+      } catch (e) {
+        return json(
+          { ok: false, error: "popular_failed", message: String(e?.message || e) },
+          500,
+          corsHeaders(request)
+        );
+      }
+    }
+
     // 公開一覧（approvedのみ） + pagination/q/sort（後方互換）
     if (request.method === "GET" && url.pathname === "/api/public/submissions") {
       // パラメータ無しなら従来挙動（LIMIT 100固定）
