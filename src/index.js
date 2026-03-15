@@ -399,6 +399,7 @@ export default {
                 download_count,
                 thumb_mode,
                 thumb_screen_id,
+                yaw_offset_quarter,
                 COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE status='approved'
@@ -424,7 +425,8 @@ export default {
                   mod_version,
                   download_count,
                   thumb_mode,
-                  thumb_screen_id
+                  thumb_screen_id,
+                  yaw_offset_quarter
                FROM submissions
                WHERE status='approved'
                  AND deleted_at IS NULL
@@ -476,6 +478,7 @@ export default {
                 download_count,
                 thumb_mode,
                 thumb_screen_id,
+                yaw_offset_quarter,
                 COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE status='approved' AND deleted_at IS NULL
@@ -499,7 +502,8 @@ export default {
                   mod_version,
                   download_count,
                   thumb_mode,
-                  thumb_screen_id
+                  thumb_screen_id,
+                  yaw_offset_quarter
                FROM submissions
                WHERE status='approved' AND deleted_at IS NULL
                ORDER BY download_count DESC, created_at DESC, id DESC
@@ -549,6 +553,7 @@ export default {
                 download_count,
                 thumb_mode,
                 thumb_screen_id,
+                yaw_offset_quarter,
                 COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE status='approved' AND deleted_at IS NULL
@@ -573,7 +578,8 @@ export default {
                   mod_version,
                   download_count,
                   thumb_mode,
-                  thumb_screen_id
+                  thumb_screen_id,
+                  yaw_offset_quarter
                FROM submissions
                WHERE status='approved' AND deleted_at IS NULL
                ORDER BY created_at DESC, id DESC
@@ -681,7 +687,8 @@ export default {
                 mod_version,
                 download_count,
                 thumb_mode,
-                thumb_screen_id
+                thumb_screen_id,
+                yaw_offset_quarter
              FROM submissions
              WHERE ${where}
              ORDER BY ${orderBy}
@@ -734,6 +741,7 @@ export default {
               download_count,
               thumb_mode,
               thumb_screen_id,
+              yaw_offset_quarter,
               COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
            FROM submissions
            WHERE id=? AND deleted_at IS NULL
@@ -758,6 +766,7 @@ export default {
                 download_count,
                 thumb_mode,
                 thumb_screen_id,
+                yaw_offset_quarter,
                 COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE id=? AND deleted_at IS NULL
@@ -805,6 +814,7 @@ export default {
               download_count,
               thumb_mode,
               thumb_screen_id,
+              yaw_offset_quarter,
               COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
            FROM submissions
            WHERE submission_no=? AND deleted_at IS NULL
@@ -829,6 +839,7 @@ export default {
                 download_count,
                 thumb_mode,
                 thumb_screen_id,
+                yaw_offset_quarter,
                 COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE submission_no=? AND deleted_at IS NULL
@@ -1433,6 +1444,7 @@ export default {
                download_count,
                thumb_mode,
                thumb_screen_id,
+               yaw_offset_quarter,
                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE author_email=? AND status='approved' AND deleted_at IS NULL
@@ -1453,6 +1465,7 @@ export default {
                download_count,
                thumb_mode,
                thumb_screen_id,
+               yaw_offset_quarter,
                COALESCE((SELECT COUNT(*) FROM likes WHERE submission_id=submissions.id), 0) AS likes_count
              FROM submissions
              WHERE author_email=? AND deleted_at IS NULL
@@ -1480,7 +1493,8 @@ export default {
                    mod_version,
                    download_count,
                    thumb_mode,
-                   thumb_screen_id
+                   thumb_screen_id,
+                   yaw_offset_quarter
                  FROM submissions
                  WHERE author_email=? AND status='approved' AND deleted_at IS NULL
                  ORDER BY created_at DESC
@@ -1499,7 +1513,8 @@ export default {
                    mod_version,
                    download_count,
                    thumb_mode,
-                   thumb_screen_id
+                   thumb_screen_id,
+                   yaw_offset_quarter
                  FROM submissions
                  WHERE author_email=? AND deleted_at IS NULL
                  ORDER BY created_at DESC
@@ -1858,6 +1873,7 @@ export default {
           download_count,
           thumb_mode,
           thumb_screen_id,
+          yaw_offset_quarter,
           (
             SELECT id
               FROM submission_screens
@@ -1919,7 +1935,8 @@ export default {
               deleted_by,
               download_count,
               thumb_mode,
-              thumb_screen_id
+              thumb_screen_id,
+              yaw_offset_quarter
             FROM submissions
             WHERE status = ?
           `;
@@ -2077,15 +2094,18 @@ export default {
         else tagsText = String(body.tags);
       }
 
+      const yawOffsetQuarterAdmin = (body && body.yaw_offset_quarter != null) ? (Number(body.yaw_offset_quarter) % 4) : null;
+
       const now = nowIso();
       await env.SUBMISSIONS_DB.prepare(
         `UPDATE submissions
            SET title=COALESCE(?, title),
                description=COALESCE(?, description),
                tags=COALESCE(?, tags),
+               yaw_offset_quarter=COALESCE(?, yaw_offset_quarter),
                updated_at=?
          WHERE id=?`
-      ).bind(title, description, tagsText, now, id).run();
+      ).bind(title, description, tagsText, yawOffsetQuarterAdmin, now, id).run();
 
       return json({ ok: true }, 200, corsHeaders(request));
     }
@@ -2161,6 +2181,7 @@ export default {
             download_count,
             thumb_mode,
             thumb_screen_id,
+            yaw_offset_quarter,
             deleted_at
          FROM submissions
          WHERE id=? LIMIT 1`
@@ -2237,15 +2258,18 @@ export default {
         else tagsText = String(body.tags);
       }
 
+      const yawOffsetQuarterOwner = (body && body.yaw_offset_quarter != null) ? (Number(body.yaw_offset_quarter) % 4) : null;
+
       const now = nowIso();
       await env.SUBMISSIONS_DB.prepare(
         `UPDATE submissions
            SET title=COALESCE(?, title),
                description=COALESCE(?, description),
                tags=COALESCE(?, tags),
+               yaw_offset_quarter=COALESCE(?, yaw_offset_quarter),
                updated_at=?
          WHERE id=?`
-      ).bind(title, description, tagsText, now, id).run();
+      ).bind(title, description, tagsText, yawOffsetQuarterOwner, now, id).run();
 
       return json({ ok: true }, 200, corsHeaders(request));
     }
@@ -2606,10 +2630,12 @@ export default {
         const now = nowIso();
         const id = crypto.randomUUID();
 
+        const yawOffsetQuarter = (body && body.yaw_offset_quarter != null) ? (Number(body.yaw_offset_quarter) % 4) : null;
+
         await env.SUBMISSIONS_DB.prepare(
-          `INSERT INTO submissions (id, status, title, description, tags, mc_version, mod_version, author_name, author_email, created_at, updated_at, download_count)
-           VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-        ).bind(id, title, description, tags, mcVersion, modVersion, authorName, authorEmail, now, now).run();
+          `INSERT INTO submissions (id, status, title, description, tags, mc_version, mod_version, author_name, author_email, created_at, updated_at, download_count, yaw_offset_quarter)
+           VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
+        ).bind(id, title, description, tags, mcVersion, modVersion, authorName, authorEmail, now, now, yawOffsetQuarter).run();
 
         const row = await env.SUBMISSIONS_DB.prepare(
           `SELECT submission_no FROM submissions WHERE id=?`
